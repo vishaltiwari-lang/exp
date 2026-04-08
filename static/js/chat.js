@@ -13,6 +13,7 @@ const sidebar = document.getElementById("sidebar");
 const resetBtn = document.getElementById("resetBtn");
 const sidebarOverlay = document.getElementById("sidebarOverlay");
 const kitSelector = document.getElementById("kitSelector");
+const headerKitSelector = document.getElementById("headerKitSelector");
 const sidebarTitle = document.getElementById("sidebarTitle");
 const sidebarSubtitle = document.getElementById("sidebarSubtitle");
 const headerBadge = document.getElementById("headerBadge");
@@ -42,12 +43,17 @@ async function loadKits() {
         const res = await fetch("/api/kits");
         const data = await res.json();
         kitSelector.innerHTML = "";
+        headerKitSelector.innerHTML = "";
         data.kits.forEach((kit) => {
             const option = document.createElement("option");
             option.value = kit.kit_id;
             option.textContent = `${KIT_ICONS[kit.kit_id] || "📦"} ${kit.name}`;
             if (kit.kit_id === data.default) option.selected = true;
             kitSelector.appendChild(option);
+
+            // Clone for header selector
+            const option2 = option.cloneNode(true);
+            headerKitSelector.appendChild(option2);
         });
         currentKit = data.default;
         const defaultKit = data.kits.find(k => k.kit_id === data.default);
@@ -55,7 +61,14 @@ async function loadKits() {
             kitName = defaultKit.name;
             totalSteps = defaultKit.num_steps;
         }
-        kitSelector.addEventListener("change", onKitChange);
+        kitSelector.addEventListener("change", () => {
+            headerKitSelector.value = kitSelector.value;
+            onKitChange();
+        });
+        headerKitSelector.addEventListener("change", () => {
+            kitSelector.value = headerKitSelector.value;
+            onKitChange();
+        });
         await loadStepsSidebar();
         showWelcomeMessage();
     } catch (e) {
@@ -74,6 +87,7 @@ async function onKitChange() {
     chatMessages.innerHTML = "";
     headerStep.innerHTML = "<span>No step selected</span>";
     document.querySelectorAll(".step-item").forEach((el) => el.classList.remove("active"));
+    closeSidebar();
     await loadStepsSidebar();
     showWelcomeMessage();
     updateQuickActions();
