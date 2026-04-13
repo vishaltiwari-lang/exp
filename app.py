@@ -346,7 +346,16 @@ def find_relevant_steps(message: str, kit_id: str = None) -> list:
 
     # Keyword matching with scoring
     for kw, step_num in keyword_index.items():
-        if kw in msg_lower:
+        # Use word-boundary matching for "step N" / "experiment N" patterns
+        # to prevent "step 1" matching inside "step 10", "step 11", etc.
+        if re.search(r'(?:step|experiment|exp)\s*\d', kw):
+            if re.search(r'\b' + re.escape(kw) + r'\b', msg_lower):
+                score = len(kw) * 2
+                if step_num in matched_steps:
+                    matched_steps[step_num] = max(matched_steps[step_num], score)
+                else:
+                    matched_steps[step_num] = score
+        elif kw in msg_lower:
             score = len(kw) * 2  # Longer keyword matches score higher
             if step_num in matched_steps:
                 matched_steps[step_num] = max(matched_steps[step_num], score)
