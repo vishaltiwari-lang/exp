@@ -249,28 +249,61 @@ def _word_match(keyword: str, text: str) -> bool:
 
 def is_in_scope(message: str, kit_id: str = None) -> bool:
     """Check if user message is within the experiment/STEM scope."""
-    kit = _get_kit(kit_id)
-    scope_keywords = KIT_SCOPE_KEYWORDS.get(kit_id or DEFAULT_KIT, KIT_SCOPE_KEYWORDS[DEFAULT_KIT])
     msg_lower = message.lower().strip()
+    scope_keywords = KIT_SCOPE_KEYWORDS.get(kit_id or DEFAULT_KIT, KIT_SCOPE_KEYWORDS[DEFAULT_KIT])
+    experiment_terms = KIT_EXPERIMENT_TERMS.get(kit_id or DEFAULT_KIT, KIT_EXPERIMENT_TERMS[DEFAULT_KIT])
+    strong_terms = KIT_STRONG_TERMS.get(kit_id or DEFAULT_KIT, KIT_STRONG_TERMS[DEFAULT_KIT])
 
+    # Greetings are always in scope
     greetings = ["hi", "hello", "hey", "thanks", "thank you", "bye", "ok", "okay", "help", "start"]
     if msg_lower in greetings:
         return True
 
+    # Check for step/experiment references
     if re.search(r"(step|exp|experiment)\s*\d+", msg_lower):
         return True
 
+    # Concept/science questions are always in scope for STEM chatbot
+    concept_question_patterns = [
+        r"what is (a |an |the )?",
+        r"how does .* work",
+        r"explain ",
+        r"tell me about ",
+        r"teach me ",
+        r"science (behind|of|concept)",
+        r"ncert",
+        r"which (class|chapter)",
+        r"(define|meaning|definition)",
+        r"why (is|are|do|does) ",
+    ]
+    science_terms = [
+        "circuit", "electricity", "magnetism", "energy", "voltage", "current",
+        "resistance", "ohm", "led", "motor", "battery", "solar", "conductor",
+        "insulator", "electrolysis", "series", "parallel", "transistor",
+        "resistor", "capacitor", "inductor", "frequency", "resonance",
+        "vibration", "sound", "wave", "electromagnetic", "induction",
+        "polarity", "charge", "electron", "proton", "atom", "physics",
+        "science", "ncert", "stem", "potentiometer", "switch", "sensor",
+        "buzzer", "piezo", "speaker", "amplifier", "bluetooth", "pcb",
+    ]
+    for pattern in concept_question_patterns:
+        if re.search(pattern, msg_lower):
+            for term in science_terms:
+                if _word_match(term, msg_lower):
+                    return True
+
+    # Check for scope keywords
     for kw in scope_keywords:
         if _word_match(kw, msg_lower):
             return True
 
-    experiment_terms = KIT_EXPERIMENT_TERMS.get(kit_id or DEFAULT_KIT, KIT_EXPERIMENT_TERMS[DEFAULT_KIT])
+    # Check for question patterns about the experiment
     question_patterns = [
         r"how (do|to|does|can|should)",
         r"what (is|are|does|do|should)",
         r"why (is|are|do|does|should)",
         r"where (is|are|do|does|should)",
-        r"which (step|part|component|wire|panel)",
+        r"which (step|part|component|wire|panel|experiment)",
         r"can (i|you|we)",
         r"tell me",
         r"show me",
@@ -282,7 +315,7 @@ def is_in_scope(message: str, kit_id: str = None) -> bool:
                 if _word_match(term, msg_lower):
                     return True
 
-    strong_terms = KIT_STRONG_TERMS.get(kit_id or DEFAULT_KIT, KIT_STRONG_TERMS[DEFAULT_KIT])
+    # Final check: does the message contain at least one strong experiment term?
     for term in strong_terms:
         if _word_match(term, msg_lower):
             return True
@@ -305,7 +338,16 @@ def find_relevant_steps(message: str, kit_id: str = None) -> list:
             matched_steps[num] = 100
 
     for kw, step_num in keyword_index.items():
-        if kw in msg_lower:
+        # Use word-boundary matching for "step N" / "experiment N" patterns
+        # to prevent "step 1" matching inside "step 10", "step 11", etc.
+        if re.search(r'(?:step|experiment|exp)\s*\d', kw):
+            if re.search(r'\b' + re.escape(kw) + r'\b', msg_lower):
+                score = len(kw) * 2
+                if step_num in matched_steps:
+                    matched_steps[step_num] = max(matched_steps[step_num], score)
+                else:
+                    matched_steps[step_num] = score
+        elif kw in msg_lower:
             score = len(kw) * 2
             if step_num in matched_steps:
                 matched_steps[step_num] = max(matched_steps[step_num], score)
@@ -332,17 +374,22 @@ def classify_query(message: str) -> str:
 
     concept_patterns = [
         r"what is (a |an |the )?(concept|science|physics|theory|principle)",
-        r"what is (a |an |the )?(potentiometer|electromagnetic|inductor|capacitor|resistor|ohm|frequency|resonance|vibration|impedance|amplif|diaphragm|baffle|bluetooth|pcb|circuit)",
-        r"how does (a |an |the )?(speaker|potentiometer|bluetooth|battery|circuit|switch|microphone|amplifier|capacitor|inductor|resistor|driver|magnet|coil|sound|pcb) work",
-        r"why (do|does|is|are|should) (we|i|the|a|this)",
+        r"what is (a |an |the )?(potentiometer|electromagnetic|inductor|capacitor|resistor|transistor|ohm|frequency|resonance|vibration|impedance|amplif|diaphragm|baffle|bluetooth|pcb|circuit|led|motor|solar|conductor|insulator|electrolysis|series|parallel|voltage|current|resistance|energy|magnetism|electricity)",
+        r"how does (a |an |the )?(speaker|potentiometer|bluetooth|battery|circuit|switch|microphone|amplifier|capacitor|inductor|resistor|driver|magnet|coil|sound|pcb|led|motor|transistor|solar|buzzer|sensor) work",
+        r"why (do|does|is|are|should|can) (we|i|the|a|this|it)",
         r"what (happens|would happen) (if|when)",
         r"explain (the )?(concept|science|physics|working|principle|theory|role|purpose|function)",
+        r"explain .*(circuit|led|motor|battery|resistor|transistor|switch|solar|conductor|insulator|electrolysis|series|parallel|voltage|current|resistance|potentiometer|bluetooth|speaker|sound|pcb|buzzer|sensor|energy|magnetism)",
         r"(what|explain) .*(concept|theory|principle|physics|science|ncert)",
         r"what (is|are) .*(used for|purpose|function|role)",
-        r"(tell|teach) me (about|more about) .*(concept|science|physics|theory|ncert|working|principle)",
+        r"(tell|teach) me (about|more about)",
         r"science (behind|of|concept)",
         r"ncert",
         r"which class|which chapter",
+        r"what (is|are) (a |an |the )?\w+",
+        r"how (does|do) .* work",
+        r"why (is|are|does|do) .*(important|needed|used|necessary)",
+        r"(define|meaning of|definition)",
     ]
 
     step_patterns = [
@@ -489,31 +536,74 @@ def generate_response(message: str, context: dict, kit_id: str = None) -> dict:
     step_context = ""
     images = []
 
-    if relevant_steps:
-        for s in relevant_steps[:2]:
-            if query_type == "concept":
+    if query_type == "concept":
+        # For concept questions: provide science context from relevant steps
+        # but only show the single most-relevant step's image
+        if relevant_steps:
+            for s in relevant_steps[:2]:
                 step_context += (
                     f"\n--- Step {s['step_number']}: {s['title']} ---\n"
                     f"Topic: {s['topic']}\n"
                     f"Science concept: {s['science_concept']}\n"
                     f"Brief instructions: {s['detailed_instructions']}\n"
                 )
-            else:
-                substeps_text = "\n".join([f"  {i+1}. {sub}" for i, sub in enumerate(s["sub_steps"])])
-                tips = "\n".join([f"  - {t}" for t in s["safety_tips"]])
-                step_context += (
-                    f"\n--- Step {s['step_number']}: {s['title']} ---\n"
-                    f"Topic: {s['topic']}\n"
-                    f"Instructions: {s['detailed_instructions']}\n"
-                    f"Sub-steps:\n{substeps_text}\n"
-                    f"Safety tips:\n{tips}\n"
-                    f"Tools needed: {', '.join(s['tools_needed'])}\n"
-                )
+            # Only show image for the top match
+            primary = relevant_steps[0]
+            if primary["image_url"]:
+                images.append({
+                    "url": primary["image_url"],
+                    "caption": f"Step {primary['step_number']}: {primary['title']}"
+                })
+        elif current_step:
+            s = steps[current_step - 1]
+            step_context = (
+                f"\n--- Current Step {s['step_number']}: {s['title']} ---\n"
+                f"Topic: {s['topic']}\n"
+                f"Science concept: {s['science_concept']}\n"
+                f"Brief instructions: {s['detailed_instructions']}\n"
+            )
             if s["image_url"]:
                 images.append({
                     "url": s["image_url"],
                     "caption": f"Step {s['step_number']}: {s['title']}"
                 })
+        # For concept questions with no step match, provide kit-wide NCERT context
+        if not step_context:
+            kb = kit["kb"]
+            ncert = "\n".join(f"- {c}" for c in kb["ncert_connections"])
+            step_context = (
+                f"\nKit: {kit['experiment_name']}\n"
+                f"NCERT Connections:\n{ncert}\n"
+                f"Learning Objectives: {', '.join(kb['learning_objectives'][:5])}\n"
+            )
+    elif relevant_steps:
+        # For step/general questions — only use the single best match for image
+        primary = relevant_steps[0]
+        substeps_text = "\n".join([f"  {i+1}. {sub}" for i, sub in enumerate(primary["sub_steps"])])
+        tips = "\n".join([f"  - {t}" for t in primary["safety_tips"]])
+        step_context = (
+            f"\n--- Step {primary['step_number']}: {primary['title']} ---\n"
+            f"Topic: {primary['topic']}\n"
+            f"Instructions: {primary['detailed_instructions']}\n"
+            f"Sub-steps:\n{substeps_text}\n"
+            f"Safety tips:\n{tips}\n"
+            f"Tools needed: {', '.join(primary['tools_needed'])}\n"
+        )
+        if primary["image_url"]:
+            images.append({
+                "url": primary["image_url"],
+                "caption": f"Step {primary['step_number']}: {primary['title']}"
+            })
+        # Add secondary step context (text only, no image) for additional info
+        if len(relevant_steps) > 1:
+            s2 = relevant_steps[1]
+            substeps_text2 = "\n".join([f"  {i+1}. {sub}" for i, sub in enumerate(s2["sub_steps"])])
+            step_context += (
+                f"\n--- Related Step {s2['step_number']}: {s2['title']} ---\n"
+                f"Topic: {s2['topic']}\n"
+                f"Instructions: {s2['detailed_instructions']}\n"
+                f"Sub-steps:\n{substeps_text2}\n"
+            )
     elif current_step:
         s = steps[current_step - 1]
         substeps_text = "\n".join([f"  {i+1}. {sub}" for i, sub in enumerate(s["sub_steps"])])
