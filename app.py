@@ -131,6 +131,33 @@ KIT_STRONG_TERMS = {
     ],
 }
 
+# Clearly off-topic categories — the ONLY things we hard-block for free.
+# Everything else is treated as a curious, in-scope question and answered
+# (the LLM ties it back to the kit). Keep this list narrow and unambiguous;
+# do NOT add words that overlap with the kits (song, music, sound, light,
+# energy, current, wave, etc.).
+OFF_TOPIC_TERMS = [
+    # politics
+    "election", "prime minister", "primeminister", "president", "politician",
+    "political party", "parliament",
+    # entertainment / celebrities
+    "movie", "film star", "actor", "actress", "celebrity", "netflix",
+    "bollywood", "hollywood", "web series", "tv show",
+    # sports
+    "cricket", "ipl", "world cup", "fifa", "football match", "cricketer",
+    "footballer", "match score",
+    # food / recipes
+    "recipe", "biryani",
+]
+OFF_TOPIC_PATTERNS = [
+    r"\bcapital of\b",
+    r"how to (cook|bake|make) (a |some )?(food|biryani|pizza|cake|curry)",
+    r"write (me )?(an? )?(essay|poem|story|paragraph)",
+    r"\btranslate\b",
+    r"stock (price|market)",
+    r"who (is|was) (the )?(president|prime minister|actor|actress|singer|hero|heroine)",
+]
+
 KITS = {}
 
 
@@ -271,8 +298,8 @@ def is_in_scope(message: str, kit_id: str = None) -> bool:
 
     # Concept/science questions are always in scope for STEM chatbot
     concept_question_patterns = [
-        r"what is (a |an |the )?",
-        r"how does .* work",
+        r"what (is|are|kind|type|else|other)",
+        r"how (does|do|is|are|can|would|much|many)",
         r"explain ",
         r"tell me about ",
         r"teach me ",
@@ -280,7 +307,10 @@ def is_in_scope(message: str, kit_id: str = None) -> bool:
         r"ncert",
         r"which (class|chapter)",
         r"(define|meaning|definition)",
-        r"why (is|are|do|does) ",
+        r"why (is|are|do|does|it|would|should|can|not)",
+        r"(other|another|alternative|substitute|different|instead of|replace) ",
+        r"can (i|we|you) (use|replace|substitute|swap|try)",
+        r"is|are there (a|an|any|other)",
     ]
     science_terms = [
         "circuit", "electricity", "magnetism", "energy", "voltage", "current",
@@ -291,6 +321,10 @@ def is_in_scope(message: str, kit_id: str = None) -> bool:
         "polarity", "charge", "electron", "proton", "atom", "physics",
         "science", "ncert", "stem", "potentiometer", "switch", "sensor",
         "buzzer", "piezo", "speaker", "amplifier", "bluetooth", "pcb",
+        "material", "materials", "baseboard", "base board", "substrate",
+        "metal", "plastic", "wood", "cardboard", "copper", "iron", "steel",
+        "alternative", "substitute", "replace", "needed", "required", "purpose",
+        "work", "works", "working", "reaction", "heat", "temperature", "light",
     ]
     for pattern in concept_question_patterns:
         if re.search(pattern, msg_lower):
@@ -326,6 +360,20 @@ def is_in_scope(message: str, kit_id: str = None) -> bool:
         if _word_match(term, msg_lower):
             return True
 
+    return False
+
+
+def is_clearly_off_topic(message: str) -> bool:
+    """Fast, free pre-filter that hard-blocks ONLY clearly unrelated questions
+    (politics, movies, sports, recipes, ...). Returns False for anything that
+    could plausibly relate to science / STEM / the kit — those get answered."""
+    msg_lower = message.lower().strip()
+    for term in OFF_TOPIC_TERMS:
+        if _word_match(term, msg_lower):
+            return True
+    for pat in OFF_TOPIC_PATTERNS:
+        if re.search(pat, msg_lower):
+            return True
     return False
 
 
@@ -481,10 +529,12 @@ def format_step_response(step: dict, detail_level: str = "normal") -> dict:
 
 
 def llm_scope_check(message: str, kit_id: str = None) -> bool:
-    """Use LLM to check if a query is related to the active experiment kit.
-    Returns True if relevant, False if off-topic. Falls back to False on errors."""
+    """Lenient LLM scope classifier. Returns True (in-scope) unless the question
+    is CLEARLY unrelated to science / STEM / the kit. Fails OPEN — if there is no
+    API key or the call errors, we allow the question through (answer-by-default),
+    since the answering LLM's own system prompt will decline anything unrelated."""
     if not OPENROUTER_API_KEY or OPENROUTER_API_KEY == "your-openrouter-api-key-here":
-        return False
+        return True  # no classifier available → let it through (fail open)
 
     kit = _get_kit(kit_id)
     kb = kit["kb"]
@@ -492,13 +542,17 @@ def llm_scope_check(message: str, kit_id: str = None) -> bool:
     components = ", ".join(kb["components"][:10])
 
     prompt = (
-        f"You are a scope classifier for a STEM education chatbot about the \"{name}\" experiment kit.\n"
+        f"You are a LENIENT scope classifier for a STEM education chatbot about the \"{name}\" experiment kit.\n"
         f"The kit involves: {kb['description'][:200]}\n"
         f"Components include: {components}\n\n"
-        "Relevant topics include: assembly/experiment steps, electronic components, circuits, wires, batteries, "
-        "science concepts (electricity, magnetism, sound, energy, Ohm's law), "
-        "NCERT physics, STEM education, troubleshooting, safety tips, and tools.\n\n"
-        "Is the following user question related to this experiment kit or its topics?\n"
+        "This is an experiment kit for CURIOUS students, so be generous. Treat as RELEVANT (YES) "
+        "anything about science, physics, electronics, materials, chemistry, how or why things work, "
+        "the kit's steps, components, tools, safety, alternatives/substitutes, or any concept a student "
+        "might naturally wonder about while building or using the kit.\n"
+        "Reply NO ONLY if the question is CLEARLY unrelated to science or the kit — for example: "
+        "politics, movies, celebrities, sports scores, cooking recipes, or homework for an unrelated subject.\n"
+        "When in doubt, reply YES.\n\n"
+        "Is the following user question relevant?\n"
         f"User question: \"{message}\"\n\n"
         "Reply with ONLY one word: YES or NO"
     )
@@ -528,7 +582,7 @@ def llm_scope_check(message: str, kit_id: str = None) -> bool:
             return answer.startswith("YES")
     except Exception as e:
         print(f"LLM scope check failed: {e}")
-        return False
+        return True  # fail open — don't reject a student because the API hiccupped
 
 
 def generate_response(message: str, context: dict, kit_id: str = None) -> dict:
@@ -536,8 +590,12 @@ def generate_response(message: str, context: dict, kit_id: str = None) -> dict:
     kit = _get_kit(kit_id)
     steps = kit["steps"]
 
-    # ── Guardrail: block out-of-scope queries ────────────────────────────────
-    # Keyword check first (fast, free). If that fails, ask LLM as fallback.
+    # ── Guardrail: answer by default; only hard-block clearly off-topic ──────
+    # 1) Fast, free block for obviously unrelated questions (politics, movies…).
+    # 2) Fast, free allow for anything matching kit / science keywords.
+    # 3) Otherwise ask the LENIENT LLM judge (which fails open when unavailable).
+    if is_clearly_off_topic(message):
+        return kit["guardrail_response"]
     if not is_in_scope(message, kit_id):
         if not llm_scope_check(message, kit_id):
             return kit["guardrail_response"]
@@ -557,8 +615,8 @@ def generate_response(message: str, context: dict, kit_id: str = None) -> dict:
     images = []
 
     if query_type == "concept":
-        # For concept questions: provide science context from relevant steps
-        # but only show the single most-relevant step's image
+        # For concept questions: provide science context but NO image — a kid
+        # asking "why does it work?" wants the explanation, not a build photo.
         if relevant_steps:
             for s in relevant_steps[:2]:
                 step_context += (
@@ -567,13 +625,6 @@ def generate_response(message: str, context: dict, kit_id: str = None) -> dict:
                     f"Science concept: {s['science_concept']}\n"
                     f"Brief instructions: {s['detailed_instructions']}\n"
                 )
-            # Only show image for the top match
-            primary = relevant_steps[0]
-            if primary["image_url"]:
-                images.append({
-                    "url": primary["image_url"],
-                    "caption": f"Step {primary['step_number']}: {primary['title']}"
-                })
         elif current_step:
             s = steps[current_step - 1]
             step_context = (
@@ -582,11 +633,6 @@ def generate_response(message: str, context: dict, kit_id: str = None) -> dict:
                 f"Science concept: {s['science_concept']}\n"
                 f"Brief instructions: {s['detailed_instructions']}\n"
             )
-            if s["image_url"]:
-                images.append({
-                    "url": s["image_url"],
-                    "caption": f"Step {s['step_number']}: {s['title']}"
-                })
         # For concept questions with no step match, provide kit-wide NCERT context
         if not step_context:
             kb = kit["kb"]
@@ -645,15 +691,131 @@ def generate_response(message: str, context: dict, kit_id: str = None) -> dict:
 
     new_step = relevant_steps[0]["step_number"] if relevant_steps else current_step
 
+    # Wrap the free-text answer (and any reference image) as cards so the
+    # frontend renders it as its own clean box.
+    cards = [{"type": "text", "text": llm_text}]
+    for img in images:
+        cards.append({
+            "type": "image",
+            "url": img["url"],
+            "caption": img["caption"],
+            "label": "For reference",
+        })
+
     return {
         "text": llm_text,
+        "cards": cards,
         "images": images,
         "current_step": new_step
     }
 
 
+# ─── Card builders (structured, decluttered "one thing at a time" responses) ──
+
+def _image_card(step, label="Build Step"):
+    """Return an image card for a step, or None if it has no image."""
+    if not step.get("image_url"):
+        return None
+    return {
+        "type": "image",
+        "url": step["image_url"],
+        "caption": f"Step {step['step_number']}: {step['title']}",
+        "label": label,
+    }
+
+
+def _target_step_num(msg_lower, current_step, num_steps):
+    """Resolve which step a message refers to (explicit number, else current)."""
+    m = re.search(r"(?:step|exp|experiment)\s*(\d+)", msg_lower)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= num_steps:
+            return n
+    return current_step
+
+
+def _step_card_response(step):
+    """ONE clean card: image banner on top, then title + what to do."""
+    card = {
+        "type": "step",
+        "step": step["step_number"],
+        "title": step["title"],
+        "topic": step["topic"],
+        "image_url": step.get("image_url") or "",
+        "instruction": step["detailed_instructions"],
+    }
+    return {
+        "text": f"**Step {step['step_number']}: {step['title']}**\n\n{step['detailed_instructions']}",
+        "cards": [card],
+        "images": [],
+        "current_step": step["step_number"],
+    }
+
+
+def _concept_card_response(step):
+    """ONE friendly science card — NO image (a kid wants the 'why', not a photo)."""
+    card = {
+        "type": "concept",
+        "step": step["step_number"],
+        "title": f"Why it works — Step {step['step_number']}",
+        "text": step["science_concept"],
+    }
+    return {
+        "text": f"🔬 **Why it works — Step {step['step_number']}: {step['title']}**\n\n{step['science_concept']}",
+        "cards": [card],
+        "images": [],
+        "current_step": step["step_number"],
+    }
+
+
+def _substeps_card_response(step):
+    """ONE card with a friendly numbered list."""
+    card = {
+        "type": "substeps",
+        "step": step["step_number"],
+        "title": f"Step {step['step_number']}: {step['title']}",
+        "items": step["sub_steps"],
+    }
+    joined = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(step["sub_steps"]))
+    return {
+        "text": f"**Step {step['step_number']}: {step['title']} — Sub-steps**\n\n{joined}",
+        "cards": [card],
+        "images": [],
+        "current_step": step["step_number"],
+    }
+
+
+def _safety_card_response(step):
+    """ONE card: safety tips, with tools as chips inside the same card."""
+    card = {
+        "type": "safety",
+        "step": step["step_number"],
+        "title": f"Stay safe — Step {step['step_number']}",
+        "items": step["safety_tips"],
+        "tools": step.get("tools_needed") or [],
+    }
+    tips = "\n".join(f"  ⚠️ {t}" for t in step["safety_tips"])
+    return {
+        "text": f"**Step {step['step_number']}: {step['title']} — Safety**\n\n{tips}",
+        "cards": [card],
+        "images": [],
+        "current_step": step["step_number"],
+    }
+
+
+def _list_card_response(title, icon, items, current_step):
+    """A kit-wide list (components / learning) as one clean box."""
+    cards = [{"type": "list", "title": title, "icon": icon, "items": items}]
+    return {
+        "text": f"**{title}**\n" + "\n".join(f"• {i}" for i in items),
+        "cards": cards,
+        "images": [],
+        "current_step": current_step,
+    }
+
+
 def handle_navigation(message: str, current_step, kit_id: str = None) -> dict | None:
-    """Handle simple navigation intents without LLM."""
+    """Handle simple navigation & detail intents without the LLM (fast, decluttered)."""
     kit = _get_kit(kit_id)
     steps = kit["steps"]
     experiment_name = kit["experiment_name"]
@@ -696,23 +858,51 @@ def handle_navigation(message: str, current_step, kit_id: str = None) -> dict | 
     # Next / Previous step
     if any(phrase in msg_lower for phrase in ["next step", "what's next", "after this", "next experiment"]):
         if current_step and current_step < len(steps):
-            step = steps[current_step]
-            return {
-                "text": f"**Step {step['step_number']}: {step['title']}**\n\n{step['detailed_instructions']}",
-                "images": [{"url": step["image_url"], "caption": f"Step {step['step_number']}: {step['title']}"}] if step["image_url"] else [],
-                "current_step": step["step_number"]
-            }
+            return _step_card_response(steps[current_step])
         elif current_step == len(steps):
             return {"text": "🎉 You've completed all steps! Great job!", "images": [], "current_step": current_step}
 
     if any(phrase in msg_lower for phrase in ["previous step", "go back", "before this", "previous experiment"]):
         if current_step and current_step > 1:
             step = steps[current_step - 2]
-            return {
-                "text": f"**Step {step['step_number']}: {step['title']}**\n\n{step['detailed_instructions']}",
-                "images": [{"url": step["image_url"], "caption": f"Step {step['step_number']}: {step['title']}"}] if step["image_url"] else [],
-                "current_step": step["step_number"]
-            }
+            return _step_card_response(step)
+
+    # ── Detail intents (deterministic, card-based, "one thing at a time") ─────
+    num_steps = len(steps)
+    step_ref = re.search(r"(?:step|exp|experiment)\s*\d+", msg_lower)
+
+    # Sub-steps for a step
+    if re.search(r"sub.?steps?", msg_lower) or "break it down" in msg_lower or "break down" in msg_lower:
+        n = _target_step_num(msg_lower, current_step, num_steps)
+        if n:
+            return _substeps_card_response(steps[n - 1])
+
+    # Science concept / "how it works" for a specific step
+    concept_kw = re.search(r"science concept|\bconcept\b|how (it|this) works?|why (does|is|do)|the science|principle", msg_lower)
+    if concept_kw and (step_ref or (current_step and re.search(r"\bthis\b|\bit\b|current", msg_lower))):
+        n = _target_step_num(msg_lower, current_step, num_steps)
+        if n:
+            return _concept_card_response(steps[n - 1])
+
+    # Safety tips for a step
+    if re.search(r"safety|precaution|danger|careful|hazard", msg_lower) and (step_ref or current_step):
+        n = _target_step_num(msg_lower, current_step, num_steps)
+        if n:
+            return _safety_card_response(steps[n - 1])
+
+    # Components / what's in the kit
+    if re.search(r"component|what'?s in the kit|what is in the kit|parts? list|what do i need", msg_lower):
+        return _list_card_response("What's in your kit", "🧰", kit["components"], current_step)
+
+    # Learning objectives
+    if re.search(r"what (will|do|can) i learn|learning objective|objectives", msg_lower):
+        return _list_card_response("What you'll learn", "📖", kit["learning_objectives"], current_step)
+
+    # Generic step display: "tell me about step N", bare "step N", "start from step N"
+    if step_ref:
+        n = _target_step_num(msg_lower, current_step, num_steps)
+        if n:
+            return _step_card_response(steps[n - 1])
 
     return None  # Not a navigation intent
 

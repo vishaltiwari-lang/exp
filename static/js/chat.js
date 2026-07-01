@@ -33,8 +33,107 @@ const KIT_ICONS = {
 // ─── Initialize ─────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
+    initThemes();
+    initLightbox();
     loadKits();
 });
+
+// ─── Image Lightbox (tap any picture to see it full-screen) ─────────────────
+
+function initLightbox() {
+    const overlay = document.createElement("div");
+    overlay.className = "lightbox";
+    overlay.innerHTML = `<button class="lightbox-close" aria-label="Close">✕</button><img alt="">`;
+    document.body.appendChild(overlay);
+
+    const close = () => overlay.classList.remove("open");
+    overlay.addEventListener("click", close);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+
+    // Delegate clicks from any card / step image
+    document.addEventListener("click", (e) => {
+        const img = e.target.closest(".card-banner img, .step-image-card img");
+        if (!img) return;
+        overlay.querySelector("img").src = img.src;
+        overlay.querySelector("img").alt = img.alt || "";
+        overlay.classList.add("open");
+    });
+}
+
+// ─── Colour Themes ──────────────────────────────────────────────────────────
+
+const THEMES = [
+    { id: "sunshine",  name: "Sunshine",  dot: "linear-gradient(135deg,#ff8a3d,#ff6b6b)" },
+    { id: "ocean",     name: "Ocean",     dot: "linear-gradient(135deg,#1f9ecb,#3ac0b0)" },
+    { id: "bubblegum", name: "Bubblegum", dot: "linear-gradient(135deg,#e0559f,#b06ae0)" },
+    { id: "mint",      name: "Mint",      dot: "linear-gradient(135deg,#2bb673,#4fc3a1)" },
+    { id: "midnight",  name: "Midnight",  dot: "linear-gradient(135deg,#7c86ff,#9d7cff)" },
+    { id: "classic",   name: "Classic",   dot: "linear-gradient(135deg,#242736,#7c5cfc)" },
+];
+const DEFAULT_THEME = "sunshine";
+const THEME_KEY = "stem_theme";
+
+function applyTheme(id) {
+    const theme = THEMES.find((t) => t.id === id) ? id : DEFAULT_THEME;
+    document.documentElement.setAttribute("data-theme", theme);
+    document.querySelectorAll(".swatch").forEach((el) => {
+        el.classList.toggle("selected", el.dataset.theme === theme);
+    });
+}
+
+function saveTheme(id) {
+    try { localStorage.setItem(THEME_KEY, id); } catch (e) { /* private mode — ignore */ }
+}
+
+function getSavedTheme() {
+    try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; }
+}
+
+function initThemes() {
+    const btn = document.getElementById("themeBtn");
+    const popover = document.getElementById("themePopover");
+    const swatches = document.getElementById("themeSwatches");
+    const resetBtn = document.getElementById("themeReset");
+    if (!btn || !popover || !swatches) return;
+
+    // Build swatches
+    swatches.innerHTML = THEMES.map((t) => `
+        <button class="swatch" data-theme="${t.id}" title="${t.name} theme">
+            <span class="swatch-dot" style="background:${t.dot}"></span>
+            <span>${t.name}</span>
+        </button>
+    `).join("");
+
+    swatches.querySelectorAll(".swatch").forEach((el) => {
+        el.addEventListener("click", () => {
+            const id = el.dataset.theme;
+            applyTheme(id);
+            saveTheme(id);
+        });
+    });
+
+    // Apply saved (or default) theme
+    applyTheme(getSavedTheme() || DEFAULT_THEME);
+
+    // Toggle popover
+    btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        popover.hidden = !popover.hidden;
+    });
+    document.addEventListener("click", (e) => {
+        if (!popover.hidden && !popover.contains(e.target) && e.target !== btn) {
+            popover.hidden = true;
+        }
+    });
+
+    // Reset / revert to default look
+    if (resetBtn) {
+        resetBtn.addEventListener("click", () => {
+            applyTheme(DEFAULT_THEME);
+            saveTheme(DEFAULT_THEME);
+        });
+    }
+}
 
 // ─── Kit Loading ────────────────────────────────────────────────
 
@@ -248,7 +347,7 @@ async function sendMessage(text) {
                 highlightStep(currentStep);
             }
 
-            addBotMessage(resp.text, resp.images || [], resp.is_guardrail);
+            addBotMessage(resp.text, resp.images || [], resp.is_guardrail, resp.cards);
 
             // Update quick actions contextually
             updateQuickActions();
@@ -277,7 +376,7 @@ function addUserMessage(text) {
     scrollToBottom();
 }
 
-function addBotMessage(text, images = [], isGuardrail = false) {
+function addBotMessage(text, images = [], isGuardrail = false, cards = null) {
     const div = document.createElement("div");
     div.className = "message bot";
 
@@ -286,30 +385,115 @@ function addBotMessage(text, images = [], isGuardrail = false) {
         guardrailBadge = `<div class="guardrail-badge">⚡ Scope Notice</div>`;
     }
 
-    let imagesHTML = "";
-    if (images && images.length > 0) {
-        imagesHTML = `<div class="step-images">`;
-        images.forEach((img) => {
-            imagesHTML += `
-                <div class="step-image-card">
-                    <img src="${escapeAttr(img.url)}" alt="${escapeAttr(img.caption)}" loading="lazy" onerror="this.parentElement.style.display='none'">
-                    <div class="image-caption">${escapeHTML(img.caption)}</div>
-                </div>
-            `;
-        });
-        imagesHTML += `</div>`;
+    let bodyHTML;
+    let contentClass = "message-content";
+    if (cards && cards.length > 0) {
+        // Structured response — each element renders as its own clean box.
+        contentClass += " has-cards";
+        bodyHTML = renderCards(cards);
+    } else {
+        let imagesHTML = "";
+        if (images && images.length > 0) {
+            imagesHTML = `<div class="step-images">`;
+            images.forEach((img) => {
+                imagesHTML += `
+                    <div class="step-image-card">
+                        <img src="${escapeAttr(img.url)}" alt="${escapeAttr(img.caption)}" loading="lazy" onerror="this.parentElement.style.display='none'">
+                        <div class="image-caption">${escapeHTML(img.caption)}</div>
+                    </div>
+                `;
+            });
+            imagesHTML += `</div>`;
+        }
+        bodyHTML = renderMarkdown(text) + imagesHTML;
     }
 
     div.innerHTML = `
         <div class="message-avatar">🤖</div>
-        <div class="message-content">
+        <div class="${contentClass}">
             ${guardrailBadge}
-            ${renderMarkdown(text)}
-            ${imagesHTML}
+            ${bodyHTML}
         </div>
     `;
     chatMessages.appendChild(div);
     scrollToBottom();
+}
+
+// ─── Card Rendering (structured, "one thing at a time" boxes) ───────────────
+
+function renderCards(cards) {
+    return cards.map(renderCard).join("");
+}
+
+function cardTitleRow(emoji, title) {
+    return `<div class="card-title-row">
+        ${emoji ? `<span class="card-emoji">${emoji}</span>` : ""}
+        <span class="card-title">${escapeHTML(title)}</span>
+    </div>`;
+}
+
+function renderCard(card) {
+    switch (card.type) {
+        case "step": {
+            const banner = card.image_url
+                ? `<div class="card-banner"><img src="${escapeAttr(card.image_url)}" alt="${escapeAttr(card.title)}" loading="lazy" onerror="this.closest('.card-banner').remove()"></div>`
+                : "";
+            return `<div class="card card-step">
+                ${banner}
+                <div class="card-body">
+                    <div class="card-title-row">
+                        <span class="card-badge">Step ${escapeHTML(String(card.step))}</span>
+                        <span class="card-title">${escapeHTML(card.title)}</span>
+                    </div>
+                    <div class="card-text">${renderMarkdown(card.instruction)}</div>
+                    <div class="card-hint">Tap below for the science 🔬, the steps 📝, or safety 🦺</div>
+                </div>
+            </div>`;
+        }
+        case "concept":
+            return `<div class="card card-concept">
+                <div class="card-body">
+                    ${cardTitleRow("🔬", card.title)}
+                    <div class="card-text">${renderMarkdown(card.text)}</div>
+                </div>
+            </div>`;
+        case "substeps":
+            return `<div class="card">
+                <div class="card-body">
+                    ${cardTitleRow("📝", card.title)}
+                    <ol class="card-ol">${card.items.map((i) => `<li>${renderMarkdown(i)}</li>`).join("")}</ol>
+                </div>
+            </div>`;
+        case "safety": {
+            const tools = (card.tools && card.tools.length)
+                ? `<div class="card-tools-label">🧰 Tools you'll need</div>
+                   <div class="c-chips">${card.tools.map((t) => `<span class="c-chip">${escapeHTML(t)}</span>`).join("")}</div>`
+                : "";
+            return `<div class="card card-safety">
+                <div class="card-body">
+                    ${cardTitleRow("🦺", card.title)}
+                    <ul class="card-ul">${card.items.map((i) => `<li>${renderMarkdown(i)}</li>`).join("")}</ul>
+                    ${tools}
+                </div>
+            </div>`;
+        }
+        case "list":
+            return `<div class="card">
+                <div class="card-body">
+                    ${cardTitleRow(card.icon || "📋", card.title)}
+                    <ul class="card-ul">${card.items.map((i) => `<li>${renderMarkdown(i)}</li>`).join("")}</ul>
+                </div>
+            </div>`;
+        case "image": // reference image from a typed question — clean banner card
+            return `<div class="card">
+                <div class="card-banner"><img src="${escapeAttr(card.url)}" alt="${escapeAttr(card.caption || "")}" loading="lazy" onerror="this.closest('.card').remove()"></div>
+                ${card.caption ? `<div class="card-body"><div class="card-cap">${escapeHTML(card.caption)}</div></div>` : ""}
+            </div>`;
+        case "text":
+            return `<div class="card"><div class="card-body"><div class="card-text">${renderMarkdown(card.text)}</div></div></div>`;
+        default:
+            return card.text ? `<div class="card"><div class="card-body"><div class="card-text">${renderMarkdown(card.text)}</div></div></div>` : "";
+    }
 }
 
 function addTypingIndicator() {
