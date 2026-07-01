@@ -34,7 +34,7 @@ if os.path.exists(ENV_PATH):
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
 # ─── OpenRouter LLM Model ────────────────────────────────────────────────────
-LLM_MODEL = "google/gemini-2.0-flash-lite-001"
+LLM_MODEL = "google/gemini-2.5-flash-lite"
 
 # ─── Load all experiment kits ─────────────────────────────────────────────────
 KIT_FILES = {
