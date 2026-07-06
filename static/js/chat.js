@@ -20,9 +20,9 @@ const headerBadge = document.getElementById("headerBadge");
 
 let currentStep = null;
 let isLoading = false;
-let currentKit = "karaoke";
-let totalSteps = 23;
-let kitName = "Karaoke Speaker Kit";
+let currentKit = "school_kit";
+let totalSteps = 25;
+let kitName = "School Project Kit";
 
 // Kit display config
 const KIT_ICONS = {

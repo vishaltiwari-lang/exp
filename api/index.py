@@ -38,11 +38,11 @@ LLM_MODEL = "google/gemini-2.5-flash-lite"
 
 # ─── Load all experiment kits ─────────────────────────────────────────────────
 KIT_FILES = {
-    "karaoke": os.path.join(ROOT_DIR, "knowledge_base.json"),
     "school_kit": os.path.join(ROOT_DIR, "knowledge_base_school_kit.json"),
+    "karaoke": os.path.join(ROOT_DIR, "knowledge_base.json"),
 }
 
-DEFAULT_KIT = "karaoke"
+DEFAULT_KIT = "school_kit"
 
 # Per-kit scope keywords for guardrail detection
 KIT_SCOPE_KEYWORDS = {
@@ -186,6 +186,10 @@ def _build_system_prompt(kb):
     ncert = "\n".join(f"- {c}" for c in kb["ncert_connections"])
     num_steps = len(kb["steps"])
     step_type = "experiment" if num_steps > 15 else "assembly step"
+    roster = "\n".join(
+        f"- {step_type.title()} {s['step_number']}: {s['title']} ({s.get('topic', '')})"
+        for s in kb["steps"]
+    )
 
     return f"""You are a friendly STEM education assistant for the "{name}" experiment kit.
 {description}
@@ -207,6 +211,10 @@ RULES:
 4. If the user asks for sub-steps or more detail, break the step into smaller numbered actions.
 5. Always connect science explanations back to the experiment kit when possible.
 6. Always be encouraging — this is a learning experience for young students.
+7. CRITICAL — NEVER MAKE THINGS UP: Only ever refer to the {step_type}s listed in "THE ONLY {step_type.upper()}S IN THIS KIT" below, using their EXACT names and numbers. NEVER invent, rename, or embellish {step_type} names (e.g. do NOT call a {step_type} "The Siren's Song" or "Spinning Power" — use the real title). NEVER make up {step_type} numbers, components, or facts that are not in this kit. If a student asks about something that is not in the list, tell them it is not part of this kit instead of inventing an answer. If you are unsure, say so.
+
+THE ONLY {step_type.upper()}S IN THIS KIT (these are the complete, exact names — use ONLY these):
+{roster}
 
 EXPERIMENT OVERVIEW:
 - {num_steps} {step_type}s in the kit
